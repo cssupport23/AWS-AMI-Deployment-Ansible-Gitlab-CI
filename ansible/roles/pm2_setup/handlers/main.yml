@@ -1,0 +1,4 @@
+---
+# Handler to restart PM2 process
+- name: Restart pm2 process
+  command: pm2 restart nextjs-app

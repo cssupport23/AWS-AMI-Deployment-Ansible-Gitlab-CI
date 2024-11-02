@@ -1,0 +1,190 @@
+---
+- name: Get metadata token for IMDSv2
+  uri:
+    url: "http://169.254.169.254/latest/api/token"
+    method: PUT
+    headers:
+      X-aws-ec2-metadata-token-ttl-seconds: "21600"
+    status_code: 200
+    return_content: yes
+  register: imds_token
+
+- name: Get instance ID using IMDSv2
+  uri:
+    url: "http://169.254.169.254/latest/meta-data/instance-id"
+    method: GET
+    headers:
+      X-aws-ec2-metadata-token: "{{ imds_token.content }}"
+    return_content: yes
+  register: instance_id
+
+- debug:
+    msg: "Instance ID is {{ instance_id.content }}"
+
+
+- name: Download the CloudWatch Agent
+  get_url:
+    url: https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+    dest: /tmp/amazon-cloudwatch-agent.deb
+
+
+- name: Install CloudWatch Agent (Amazon Linux/RedHat-based)
+  yum:
+    name: amazon-cloudwatch-agent
+    state: present
+
+# Install Node.js and PM2
+- name: Install Node.js
+  yum:
+    name: nodejs
+    state: present
+    enablerepo: epel
+
+- name: Install PM2 globally using npm
+  npm:
+    name: pm2
+    global: yes
+    state: present
+
+- name: Install PM2 Logrotate
+  command: pm2 install pm2-logrotate
+
+- name: Set log rotation settings
+  command: pm2 set pm2-logrotate:max_size 10M
+
+- name: Set log retention to 10 logs
+  command: pm2 set pm2-logrotate:retain 10
+
+- name: Enable log compression
+  command: pm2 set pm2-logrotate:compress true
+
+- name: Set log rotation to daily
+  command: pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
+
+# Navigate to the app directory and install dependencies
+- name: Install dependencies for the Next.js app
+  command: npm install
+  args:
+    chdir: /var/www/html  # Assuming the app is cloned to this directory
+
+- name: Build the Next.js app
+  command: npm run build
+  args:
+    chdir: /var/www/html
+
+
+# Start the Next.js app using PM2
+- name: Start the Next.js app with PM2
+  command: pm2 start npm --name "nextjs-app" -- start 
+  args:
+    chdir: /var/www/html
+  environment:
+    PORT: 80
+    
+# Ensure the PM2 process is set to restart on server reboot
+- name: Set PM2 to restart app on reboot
+  command: pm2 save
+
+- name: Stop the CloudWatch Agent if it is running
+  command: amazon-cloudwatch-agent-ctl -a stop
+  ignore_errors: yes  # Ignore errors in case the agent is not running
+  become: yes
+  become_user: root
+
+- name: Gather EC2 instance metadata
+  ec2_metadata_facts:
+
+- name: Create the CloudWatch Agent configuration file from template
+  template:
+    src: amazon-cloudwatch-agent.json.j2
+    dest: /etc/amazon/amazon-cloudwatch-agent/amazon-cloudwatch-agent.d/amazon-cloudwatch-agent.json
+  become: yes
+  vars:
+    instance_id: "{{ ansible_ec2_metadata['instance-id'] }}"
+
+
+# - name: Create the CloudWatch Agent configuration file
+#   copy:
+#     dest: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+#     content: |
+#       {
+#         "agent": {
+#           "metrics_collection_interval": 60,
+#           "logfile": "/opt/aws/amazon-cloudwatch-agent/logs/amazon-cloudwatch-agent.log"
+#         },
+#         "metrics": {
+#           "append_dimensions": {
+#             "InstanceId": "{{instance_id.content}}"
+#           },
+#           "metrics_collected": {
+#             "cpu": {
+#               "measurement": [
+#                 "cpu_usage_idle",
+#                 "cpu_usage_iowait",
+#                 "cpu_usage_user",
+#                 "cpu_usage_system"
+#               ],
+#               "metrics_collection_interval": 60,
+#               "totalcpu": true
+#             },
+#             "disk": {
+#               "measurement": [
+#                 "used_percent"
+#               ],
+#               "metrics_collection_interval": 60,
+#               "resources": [
+#                 "/"
+#               ]
+#             },
+#             "mem": {
+#               "measurement": [
+#                 "mem_used_percent"
+#               ],
+#               "metrics_collection_interval": 60
+#             }
+#           }
+#         },
+#         "logs": {
+#           "logs_collected": {
+#             "files": {
+#               "collect_list": [
+#                 {
+#                   "file_path": "/home/ec2-user/.pm2/logs/*.log",
+#                   "log_group_name": "/pm2/logs",
+#                   "log_stream_name": "{{ instance_id.content }}/pm2",
+#                   "timestamp_format": "%Y-%m-%d %H:%M:%S"
+#                 },
+#                 {
+#                   "file_path": "/root/.pm2/logs/*.log",
+#                   "log_group_name": "/pm2/logs",
+#                   "log_stream_name": "{{ instance_id.content }}/pm2",
+#                   "timestamp_format": "%Y-%m-%d %H:%M:%S"
+#                 }
+#               ]
+#             }
+#           }
+#         }
+#       }
+#   become: yes
+#   become_user: root
+
+# - name: Check if CloudWatch agent configuration exists
+#   stat:
+#     path: /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json
+#   register: cloudwatch_config_exists
+
+
+# - name: Ensure CloudWatch agent configuration exists
+#   debug:
+#     msg: "CloudWatch agent configuration file is present."
+#   when: cloudwatch_config_exists.stat.exists
+
+
+- name: Start and enable CloudWatch Agent
+  command: amazon-cloudwatch-agent-ctl -a start
+  become: yes
+  become_user: root
+
+
+
+

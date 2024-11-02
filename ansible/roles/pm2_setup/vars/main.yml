@@ -1,0 +1,4 @@
+---
+nextjs_app_dir: /var/www/html
+pm2_process_name: "nextjs-app"
+

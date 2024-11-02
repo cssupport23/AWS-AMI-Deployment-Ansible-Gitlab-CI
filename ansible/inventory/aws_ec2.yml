@@ -1,0 +1,12 @@
+plugin: amazon.aws.aws_ec2
+regions:
+  - us-east-1  # Change this to your AWS region
+strict: false
+keyed_groups:
+  - key: tags
+    prefix: tag
+hostnames:
+# - private-ip-address
+  - ip-address
+filters:
+  tag:Id: nextjs-dev  # Filter instances based on tags
